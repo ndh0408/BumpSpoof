@@ -280,11 +280,13 @@ class AndroidTransport(BaseTransport):
             return True
 
         # Step 2: LDPlayer / MuMu probe — geo fix works but isn't advertised.
-        # Send a recognisable coordinate and confirm via dumpsys.
+        # Use a coordinate in the Gulf of Thailand (same area as _oneshot_delivers)
+        # so it won't collide with a previous Vietnam-area spoof still in dumpsys.
+        # 8.654321, 102.345678 → dumpsys shows "8.654321" — distinctive enough.
         try:
             probe = subprocess.run(
                 self._adb("emu", "geo", "fix",
-                          "105.0000001", "21.0000001", "10.0"),
+                          "102.345678", "8.654321", "10.0"),
                 capture_output=True, timeout=3, text=True,
             )
             if probe.returncode != 0:
@@ -297,7 +299,7 @@ class AndroidTransport(BaseTransport):
             out = self._run("shell", "dumpsys", "location", timeout=6).stdout or ""
         except Exception:
             return False   # can't confirm — don't claim emu mode
-        return "21.000000" in out
+        return "8.654321" in out
 
     def _try_cmd(self) -> bool:
         try:

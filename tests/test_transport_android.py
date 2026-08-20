@@ -213,12 +213,12 @@ def test_try_emu_detects_ldplayer_via_probe(monkeypatch):
             # LDPlayer emu help — no mention of geo
             return _Proc(0, stdout="Android console: available commands:\nhelp\nping\nkill\n")
         if "emu" in cmd and "geo" in cmd:
-            # Probe accepted
+            # Probe accepted — coordinate 8.654321, 102.345678 (Gulf of Thailand)
             return _Proc(0)
         if "dumpsys" in cmd:
             return _Proc(0, stdout=(
                 "passive provider [passive]: enabled=true\n"
-                "gps provider [gps]: last location=Location[gps 21.000000,105.000000 "
+                "gps provider [gps]: last location=Location[gps 8.654321,102.345678 "
                 "hAcc=5 et=+1s2ms alt=10.0]"
             ))
         return _Proc(0)
@@ -228,8 +228,33 @@ def test_try_emu_detects_ldplayer_via_probe(monkeypatch):
     assert t._try_emu() is True
 
 
-def test_try_emu_fails_when_probe_not_in_dumpsys(monkeypatch):
-    """Probe accepted by emu console but never lands in dumpsys — no geo fix support."""
+def test_try_emu_probe_not_fooled_by_previous_vietnam_location(monkeypatch):
+    """
+    Regression: old probe used 21.0000001 → dumpsys "21.000000".
+    After a Hanoi trip, dumpsys already has 21.XXXXXX from the previous geo fix.
+    _try_emu reconnecting would find "21.000000" in dumpsys without the probe
+    landing — false positive. New probe uses 8.654321 (Gulf of Thailand).
+    """
+    import core.transport.android_adb as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+
+    def fake_run(cmd, *a, **k):
+        if "emu" in cmd and "help" in cmd:
+            return _Proc(0, stdout="Android console: ping\n")  # no geo
+        if "emu" in cmd and "geo" in cmd:
+            return _Proc(0)  # probe accepted but pretend nothing happens in HAL
+        if "dumpsys" in cmd:
+            # Previous trip was Hanoi — dumpsys still shows old location
+            return _Proc(0, stdout=(
+                "gps provider [gps]: last location=Location[gps 21.028511,105.854167 "
+                "hAcc=8 et=+5s alt=12.0]"
+            ))
+        return _Proc(0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    t = AndroidTransport(device_serial="emulator-5554")
+    # Must return False — probe didn't land, old Hanoi location shouldn't fool us
+    assert t._try_emu() is False
     import core.transport.android_adb as mod
     monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
 
@@ -280,9 +305,9 @@ def test_connect_prefers_emu_over_cmd_when_ldplayer(monkeypatch):
         # emu geo fix probe: accepted
         if "emu" in cmd and "geo" in cmd:
             return _Proc(0)
-        # dumpsys: probe landed
+        # dumpsys: probe landed (Gulf of Thailand — 8.654321 is our new probe)
         if "dumpsys" in cmd:
-            return _Proc(0, stdout="gps: Location[gps 21.000000,105.000000]")
+            return _Proc(0, stdout="gps: Location[gps 8.654321,102.345678]")
         return _Proc(0)
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)

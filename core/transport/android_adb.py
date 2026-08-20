@@ -1,13 +1,16 @@
 """
 android_adb.py — Android transport via ADB.
 
-Tries three backends, in order:
+Tries three backends, in priority order:
 
   1. Companion APK  (adb forward tcp:12345 → MockLocationService)
-  2. AOSP emulator  (`adb emu geo fix`) — stock Android Virtual Device
+  2. Emulator geo fix  (`adb emu geo fix`) — AOSP AVD, LDPlayer, MuMu, and
+                    any QEMU-based emulator. Location objects produced this way
+                    have isMock() = false — bypasses app-level anti-spoofing
+                    checks (Life360, amo, Zenly-style apps that filter mock flag).
   3. cmd location   (`adb shell cmd location providers set-test-provider-*`)
-                    Android 10+, no APK. This is what cloud-phone / LDPlayer /
-                    MuMu / Honor-spoofed emulators actually support.
+                    Android 10+, no APK. Works on physical devices and cloud
+                    phones. Sets isMock() = true — rejected by anti-spoof apps.
 
 Device setup:
   Developer Options → USB debugging: ON
@@ -187,7 +190,7 @@ class AndroidTransport(BaseTransport):
         self._remove_forward()
         if self._try_emu():
             self._mode = "emu"
-            self._status = "Đã kết nối giả lập Android (adb emu geo)."
+            self._status = "Đã kết nối giả lập Android (geo fix — không mock flag)."
             return True
         if self._try_cmd():
             self._mode = "cmd"
@@ -246,16 +249,55 @@ class AndroidTransport(BaseTransport):
         return True
 
     def _try_emu(self) -> bool:
-        """Stock AOSP emulator console. Cloud-phones / LDPlayer reject this."""
+        """
+        Emulator console geo fix — Location.isMock() = false on every injected
+        location, so apps that filter the mock flag (amo, Life360, Zenly-style)
+        accept the coordinates.
+
+        Works on: stock AOSP AVD, LDPlayer, MuMu, BlueStacks, and any
+        QEMU-based emulator with a serial of the form emulator-NNNN.
+
+        Detection strategy:
+          1. Ask emu help — AOSP AVD lists "geo" in the output.
+          2. LDPlayer supports geo fix but omits it from emu help output.
+             Fall through to a direct probe: send a recognisable fix and
+             confirm it lands in dumpsys location. Only claim emu mode when
+             the fix actually reaches the location service.
+        """
+        # Step 1: standard help advertisement (AOSP AVD)
+        geo_advertised = False
         try:
             r = subprocess.run(
                 self._adb("emu", "help"),
-                capture_output=True, timeout=2, text=True,
+                capture_output=True, timeout=3, text=True,
             )
+            blob = (r.stdout or "") + (r.stderr or "")
+            geo_advertised = r.returncode == 0 and "geo" in blob.lower()
+        except Exception:
+            pass
+
+        if geo_advertised:
+            return True
+
+        # Step 2: LDPlayer / MuMu probe — geo fix works but isn't advertised.
+        # Send a recognisable coordinate and confirm via dumpsys.
+        try:
+            probe = subprocess.run(
+                self._adb("emu", "geo", "fix",
+                          "105.0000001", "21.0000001", "10.0"),
+                capture_output=True, timeout=3, text=True,
+            )
+            if probe.returncode != 0:
+                return False
         except Exception:
             return False
-        blob = (r.stdout or "") + (r.stderr or "")
-        return r.returncode == 0 and "geo" in blob.lower()
+
+        time.sleep(0.5)
+        try:
+            out = self._run("shell", "dumpsys", "location", timeout=6).stdout or ""
+        except Exception:
+            return False   # can't confirm — don't claim emu mode
+        return "21.000000" in out
 
     def _try_cmd(self) -> bool:
         try:
@@ -424,18 +466,18 @@ class AndroidTransport(BaseTransport):
             return False
 
     def _send_emu(self, lat, lon, alt, speed) -> bool:
-        # Console takes longitude first, then latitude. Address the emulator
-        # with `-e` (not `-s <serial>`): the console command is emulator-only,
-        # and `-e` targets the single running AVD directly.
-        args = [
-            "emu", "geo", "fix",
-            f"{float(lon):.7f}", f"{float(lat):.7f}", f"{float(alt):.1f}",
-        ]
+        # Emulator console convention: longitude first, then latitude.
+        # Uses self._adb() so device_serial is respected — critical when
+        # multiple emulators are running (LDPlayer multi-instance, etc.).
+        # isMock() = false on the resulting Location — bypasses app-level
+        # anti-spoofing checks that reject cmd-location test providers.
+        args = ["emu", "geo", "fix",
+                f"{float(lon):.7f}", f"{float(lat):.7f}", f"{float(alt):.1f}"]
         if speed:
             args += ["0", f"{float(speed):.2f}"]
         try:
             r = subprocess.run(
-                ["adb", "-e", *args], capture_output=True, timeout=3, text=True,
+                self._adb(*args), capture_output=True, timeout=3, text=True,
             )
             return r.returncode == 0
         except Exception:

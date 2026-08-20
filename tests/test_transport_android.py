@@ -174,10 +174,125 @@ def test_emu_geo_fix_lon_lat_order(monkeypatch):
     t = AndroidTransport(device_serial="emulator-5554")
     t._mode = "emu"
     assert t.send_location(21.0278, 105.8342, alt=12.0) is True
-    # adb emu geo fix LON LAT ALT  — longitude first
-    assert captured["cmd"][2:5] == ["emu", "geo", "fix"]
-    assert captured["cmd"][5] == "105.8342000"  # lon
-    assert captured["cmd"][6] == "21.0278000"   # lat
+    cmd = captured["cmd"]
+    # Uses device serial — critical for multi-instance setups
+    assert "-s" in cmd
+    assert "emulator-5554" in cmd
+    # adb -s <serial> emu geo fix LON LAT ALT — longitude first
+    emu_idx = cmd.index("emu")
+    assert cmd[emu_idx:emu_idx + 3] == ["emu", "geo", "fix"]
+    assert cmd[emu_idx + 3] == "105.8342000"  # lon first
+    assert cmd[emu_idx + 4] == "21.0278000"   # lat second
+
+
+def test_send_emu_uses_device_serial(monkeypatch):
+    """_send_emu must route via the device serial, not the -e shorthand."""
+    import core.transport.android_adb as mod
+    captured = {}
+
+    def fake_run(cmd, *a, **k):
+        captured["cmd"] = cmd
+        return _Proc(0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    t = AndroidTransport(device_serial="emulator-5566")
+    t._mode = "emu"
+    t.send_location(10.0, 100.0)
+    assert "-s" in captured["cmd"]
+    assert "emulator-5566" in captured["cmd"]
+    assert "-e" not in captured["cmd"]
+
+
+def test_try_emu_detects_ldplayer_via_probe(monkeypatch):
+    """LDPlayer: emu help doesn't list 'geo' but geo fix probe lands in dumpsys."""
+    import core.transport.android_adb as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+
+    def fake_run(cmd, *a, **k):
+        if "emu" in cmd and "help" in cmd:
+            # LDPlayer emu help — no mention of geo
+            return _Proc(0, stdout="Android console: available commands:\nhelp\nping\nkill\n")
+        if "emu" in cmd and "geo" in cmd:
+            # Probe accepted
+            return _Proc(0)
+        if "dumpsys" in cmd:
+            return _Proc(0, stdout=(
+                "passive provider [passive]: enabled=true\n"
+                "gps provider [gps]: last location=Location[gps 21.000000,105.000000 "
+                "hAcc=5 et=+1s2ms alt=10.0]"
+            ))
+        return _Proc(0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    t = AndroidTransport(device_serial="emulator-5554")
+    assert t._try_emu() is True
+
+
+def test_try_emu_fails_when_probe_not_in_dumpsys(monkeypatch):
+    """Probe accepted by emu console but never lands in dumpsys — no geo fix support."""
+    import core.transport.android_adb as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+
+    def fake_run(cmd, *a, **k):
+        if "emu" in cmd and "help" in cmd:
+            return _Proc(0, stdout="Android console: available commands:\nping\n")
+        if "emu" in cmd and "geo" in cmd:
+            return _Proc(0)  # command accepted but nothing happens
+        if "dumpsys" in cmd:
+            return _Proc(0, stdout="gps provider [gps]: last location=null")
+        return _Proc(0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    t = AndroidTransport(device_serial="emulator-5554")
+    assert t._try_emu() is False
+
+
+def test_try_emu_fails_when_probe_rejected(monkeypatch):
+    """Emulator console rejects geo fix — physical device or cloud phone."""
+    import core.transport.android_adb as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+
+    def fake_run(cmd, *a, **k):
+        if "emu" in cmd:
+            return _Proc(1, stderr="could not connect to TCP port 5554")
+        return _Proc(0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    t = AndroidTransport(device_serial="emulator-5554")
+    assert t._try_emu() is False
+
+
+def test_connect_prefers_emu_over_cmd_when_ldplayer(monkeypatch):
+    """LDPlayer: emu mode is detected and used — cmd location is NOT activated."""
+    import core.transport.android_adb as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+
+    def fake_run(cmd, *a, **k):
+        joined = " ".join(str(c) for c in cmd)
+        # Companion: not installed
+        if "pm" in cmd and "list" in cmd:
+            return _Proc(0, stdout="")
+        if cmd[:2] == ["adb", "forward"] and "--remove" not in cmd:
+            return _Proc(0)
+        # emu help: no geo listed (LDPlayer style)
+        if "emu" in cmd and "help" in cmd:
+            return _Proc(0, stdout="Android console: ping\nkill\n")
+        # emu geo fix probe: accepted
+        if "emu" in cmd and "geo" in cmd:
+            return _Proc(0)
+        # dumpsys: probe landed
+        if "dumpsys" in cmd:
+            return _Proc(0, stdout="gps: Location[gps 21.000000,105.000000]")
+        return _Proc(0)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(AndroidTransport, "_open_socket", lambda self, timeout=1.2: False)
+
+    t = AndroidTransport(device_serial="emulator-5554")
+    assert t.connect() is True
+    assert t._mode == "emu"
+    assert t._providers == []   # emu mode never touches providers list
+    assert "mock" not in t.status().lower() or "không" in t.status().lower()
 
 
 def test_send_cmd_writes_shell_stdin(monkeypatch):

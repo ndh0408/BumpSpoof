@@ -1,0 +1,16 @@
+# BumpSpoof — desktop GPS spoofer (iOS + Android)
+#
+# Python 3.13+ is REQUIRED for connecting over WiFi: the iOS 17+ RemotePairing
+# tunnel is TLS-PSK, and ssl.SSLContext only gained set_psk_client_callback()
+# in 3.13. On 3.12 everything else works, but WiFi cannot — the app says so
+# instead of failing obscurely.
+#
+#   py -3.13 -m pip install -r requirements.txt
+#   py -3.13 main.py
+
+customtkinter>=5.2.2
+tkintermapview>=1.29
+requests>=2.31.0
+
+# iOS. iOS 17+ location needs pymobiledevice3 >= 10.
+pymobiledevice3>=10.1.0

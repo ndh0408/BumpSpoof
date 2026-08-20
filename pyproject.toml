@@ -1,0 +1,39 @@
+[project]
+name = "bumpspoof"
+version = "2.0.0"
+description = "Desktop GPS location simulator for iOS and Android (Vietnamese UI)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "customtkinter>=5.2.2",
+    "tkintermapview>=1.29",
+    "requests>=2.31.0",
+    "pymobiledevice3>=10.1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[project.scripts]
+bumpspoof = "main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # customtkinter/tkintermapview daemon threads can touch Tk during teardown
+    # of the live-window smoke tests as the window is destroyed; harmless.
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["legacy"]
+
+[tool.ruff.lint]
+# Gate on genuine bug-class rules, not stylistic restyling: this codebase
+# deliberately uses typing.List/Optional and its own import order, and a desktop
+# GUI legitimately swallows exceptions around cleanup/network/hardware. So the
+# pyupgrade / import-sort / blind-except families are noise here, not bugs.
+select = ["F", "E722", "E711", "E712", "E713", "B006", "B008"]

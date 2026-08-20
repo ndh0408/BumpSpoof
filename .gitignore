@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.spec
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# BumpSpoof runtime data (user-local; never commit device metadata or caches)
+.bumpspoof/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Android build output
+android_companion/build/
+*.apk
+*.keystore
+
+# Packaging output (PyInstaller / Inno Setup)
+packaging/build/
+packaging/dist/
+packaging/Output/
+packaging/*.log
